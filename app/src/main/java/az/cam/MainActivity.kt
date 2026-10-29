@@ -19,6 +19,7 @@ import android.os.SystemClock
 import android.util.Range
 import android.util.Size
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.TextureView
@@ -67,6 +68,10 @@ class MainActivity : Activity() {
     private var lastT = 0L
     private var fpsNow = 0f
     private var report = ""
+    private var mainMode = false          // false = 0.6x ultra-wide, true = 1.0x main camera (60fps attempt)
+    private var downT = 0L
+    private var downInCorner = false
+    private val tapTimes = ArrayList<Long>()
     private var status = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -113,6 +118,20 @@ class MainActivity : Activity() {
             info.visibility = if (info.visibility == View.VISIBLE) View.GONE else View.VISIBLE
             refreshInfo(); true
         }
+        // Hidden switch: triple-tap the top-left corner (150dp) -> toggles 0.6x <-> 1.0x/60fps
+        root.setOnTouchListener { _, e ->
+            val dn = resources.displayMetrics.density
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { downT = e.eventTime; downInCorner = e.x < 150 * dn && e.y < 150 * dn }
+                MotionEvent.ACTION_UP -> if (downInCorner && e.eventTime - downT < 250) {
+                    val now = e.eventTime
+                    tapTimes.removeAll { now - it > 1500 }
+                    tapTimes.add(now)
+                    if (tapTimes.size >= 3) { tapTimes.clear(); switchMode() }
+                }
+            }
+            false
+        }
         setContentView(root)
 
         orient = object : OrientationEventListener(this) {
@@ -151,6 +170,20 @@ class MainActivity : Activity() {
         orient.disable()
         stop()
         super.onPause()
+    }
+
+    private fun closeCamera() {
+        gen++
+        try { session?.close() } catch (_: Exception) {}
+        try { device?.close() } catch (_: Exception) {}
+        try { curSurface?.release() } catch (_: Exception) {}
+        session = null; device = null; curSurface = null; opening = false
+    }
+
+    private fun switchMode() {
+        closeCamera()
+        mainMode = !mainMode
+        if (canRun && tv.isAvailable) openBest()
     }
 
     private fun stop() {
@@ -272,7 +305,12 @@ class MainActivity : Activity() {
         if (opening || device != null) return
         opening = true
         candidates = buildCandidates()
-        status = "NAMIZAD SIRASI:\n" + candidates.mapIndexed { i, c -> "$i: ${label(c)}" }.joinToString("\n")
+        if (mainMode) {
+            // 1.0x main camera: force a 60fps range first (not advertised by the phone), then fall back to normal
+            val m = candidates.firstOrNull { it.id == "0" && it.phys == null }
+            if (m != null) candidates = listOf(m.copy(mode = 0, fps = Range(60, 60)), m)
+        }
+        status = (if (mainMode) "MOD: 1.0x / 60fps denemesi\n" else "MOD: 0.6x ultra-genis\n") + "NAMIZAD SIRASI:\n" + candidates.mapIndexed { i, c -> "$i: ${label(c)}" }.joinToString("\n")
         tryIndex = 0
         openCandidate()
     }
